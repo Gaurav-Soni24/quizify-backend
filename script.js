@@ -27,7 +27,7 @@ if (!firebaseApp) {
 
 // Test Route
 app.get('/', (req, res) => {
-  res.send('Firebase Auth with Express Backend');
+  res.send('Finally kr diya humne');
 });
 
 // Register Route

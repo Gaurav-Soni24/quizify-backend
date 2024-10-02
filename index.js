@@ -33,7 +33,7 @@ try {
 
   // Test Route
   app.get("/", (req, res) => {
-    res.send("Finally kr diya humne");
+    res.send("Finally kr diya humne hogya");
   });
 
   // Register Route

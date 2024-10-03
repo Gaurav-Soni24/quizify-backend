@@ -11,6 +11,7 @@ try {
     initializeFirebase,
     uploadProcessData,
     downloadProcessData,
+    getFirebaseApp,
   } = require("./firebase");
 
   // Initialize Express app
@@ -192,8 +193,18 @@ try {
         createdAt: new Date().toISOString()
       };
 
-      // Upload the quiz data to Firestore
-      await uploadProcessData("CreateQuiz", quizId, quizDocument);
+      // Get Firestore instance
+      const db = getFirebaseApp().firestore();
+
+      // Upload the quiz data to Firestore in a nested collection
+      await db.collection('users').doc(userId).collection('quizzes').doc(quizId).set(quizDocument);
+
+      // Store the quiz title in a separate collection for easier retrieval
+      await db.collection('quizTitles').doc(quizId).set({
+        userId: userId,
+        title: quizData.title,
+        createdAt: new Date().toISOString()
+      });
 
       res.status(201).json({ message: "Quiz created successfully", quizId: quizId });
     } catch (error) {

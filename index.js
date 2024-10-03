@@ -170,6 +170,38 @@ try {
     }
   });
 
+  // Create Quiz Route (Protected)
+  app.post("/create-quiz", authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const quizData = req.body;
+
+    try {
+      // Validate quiz data structure
+      if (!quizData.title || !quizData.description || !Array.isArray(quizData.questions)) {
+        return res.status(400).json({ error: "Invalid quiz data structure" });
+      }
+
+      // Generate a unique quiz ID
+      const quizId = `quiz_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create the quiz document
+      const quizDocument = {
+        userId: userId,
+        quizId: quizId,
+        ...quizData,
+        createdAt: new Date().toISOString()
+      };
+
+      // Upload the quiz data to Firestore
+      await uploadProcessData("CreateQuiz", quizId, quizDocument);
+
+      res.status(201).json({ message: "Quiz created successfully", quizId: quizId });
+    } catch (error) {
+      console.error("Error creating quiz:", error);
+      res.status(500).json({ error: "Failed to create quiz" });
+    }
+  });
+
   // Logout Route (Client-side handles token removal)
   // You can implement token blacklisting if necessary
 

@@ -125,7 +125,6 @@ try {
       next();
     });
   };
-
   // Protected Route Example
   app.get("/dashboard", authenticateToken, async (req, res) => {
     const userId = req.user.userId;
@@ -135,9 +134,25 @@ try {
       if (userData) {
         // Remove sensitive information before sending
         const { password, ...safeUserData } = userData;
-        res
-          .status(200)
-          .json({ message: "Welcome to the dashboard", user: safeUserData });
+
+        // Get Firestore instance
+        const db = getFirebaseApp().firestore();
+
+        // Fetch quizzes created by the user
+        const quizzesSnapshot = await db.collection('quizzes')
+          .where('userId', '==', userId)
+          .get();
+
+        const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+
+        res.status(200).json({
+          message: "Welcome to the dashboard",
+          user: safeUserData,
+          quizzes: userQuizzes
+        });
       } else {
         res.status(404).json({ error: "User not found" });
       }

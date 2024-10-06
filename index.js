@@ -207,7 +207,7 @@ try {
 
     try {
       // Validate quiz data structure
-      if (!quizData.title || !quizData.description || !Array.isArray(quizData.questions)) {
+      if (!quizData.title || !quizData.description || !Array.isArray(quizData.questions) || !quizData.requiredFields) {
         return res.status(400).json({ error: "Invalid quiz data structure" });
       }
 
@@ -228,10 +228,11 @@ try {
       // Upload the quiz data to Firestore in a nested collection
       await db.collection('users').doc(userId).collection('quizzes').doc(quizId).set(quizDocument);
 
-      // Store the quiz title in a separate collection for easier retrieval
+      // Store the quiz title and required fields in a separate collection for easier retrieval
       await db.collection('quizTitles').doc(quizId).set({
         userId: userId,
         title: quizData.title,
+        requiredFields: quizData.requiredFields,
         createdAt: new Date().toISOString()
       });
 

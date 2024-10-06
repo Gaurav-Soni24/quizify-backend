@@ -161,7 +161,6 @@ try {
       res.status(500).json({ error: "Failed to access dashboard" });
     }
   });
-
   // Get User Data Route (Protected)
   app.get("/user/:userId", authenticateToken, async (req, res) => {
     const { userId } = req.params;
@@ -176,7 +175,22 @@ try {
       if (userData) {
         // Remove sensitive information before sending
         const { password, ...safeUserData } = userData;
-        res.status(200).json(safeUserData);
+
+        // Get Firestore instance
+        const db = getFirebaseApp().firestore();
+
+        // Fetch quizzes created by the user
+        const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
+
+        const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+          id: doc.id,
+          title: doc.data().title
+        }));
+
+        res.status(200).json({
+          ...safeUserData,
+          quizzes: userQuizzes
+        });
       } else {
         res.status(404).json({ error: "User not found" });
       }

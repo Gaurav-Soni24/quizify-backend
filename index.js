@@ -19,7 +19,7 @@ try {
   const PORT = process.env.PORT || 3000;
 
   // Middleware
-  app.use(bodyParser.json());
+  app.use(express.json()); // Use express.json() instead of bodyParser.json()
   app.use(cors());
 
   // JWT Secret
@@ -34,7 +34,7 @@ try {
 
   // Test Route
   app.get("/", (req, res) => {
-    res.send("Finally kr diya humne hogya");
+    res.send("Server is running");
   });
 
   // Register Route
@@ -125,75 +125,72 @@ try {
       next();
     });
   };
+
   // Protected Route Example
   app.get("/dashboard", authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     try {
       const userData = await downloadProcessData("users", userId);
-      if (userData) {
-        // Remove sensitive information before sending
-        const { password, ...safeUserData } = userData;
-
-        // Get Firestore instance
-        const db = getFirebaseApp().firestore();
-
-        // Fetch quizzes created by the user
-        const quizzesSnapshot = await db.collection('quizzes')
-          .where('userId', '==', userId)
-          .get();
-
-        const userQuizzes = quizzesSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-
-        res.status(200).json({
-          message: "Welcome to the dashboard",
-          user: safeUserData,
-          quizzes: userQuizzes
-        });
-      } else {
-        res.status(404).json({ error: "User not found" });
+      if (!userData) {
+        return res.status(404).json({ error: "User not found" });
       }
+
+      // Remove sensitive information before sending
+      const { password, ...safeUserData } = userData;
+
+      // Get Firestore instance
+      const db = getFirebaseApp().firestore();
+
+      // Fetch quizzes created by the user
+      const quizzesSnapshot = await db.collection('quizzes')
+        .where('userId', '==', userId)
+        .get();
+
+      const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      res.status(200).json({
+        message: "Welcome to the dashboard",
+        user: safeUserData,
+        quizzes: userQuizzes
+      });
     } catch (error) {
       console.error("Error accessing dashboard:", error);
       res.status(500).json({ error: "Failed to access dashboard" });
     }
   });
+
   // Get User Data Route (Protected)
   app.get("/user/:userId", authenticateToken, async (req, res) => {
     const { userId } = req.params;
 
-    // Remove the check for matching userId to allow access to any user data
-    // if (req.user.userId !== userId) {
-    //   return res.status(403).json({ error: 'Access denied.' });
-    // }
-
     try {
       const userData = await downloadProcessData("users", userId);
-      if (userData) {
-        // Remove sensitive information before sending
-        const { password, ...safeUserData } = userData;
-
-        // Get Firestore instance
-        const db = getFirebaseApp().firestore();
-
-        // Fetch quizzes created by the user
-        const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
-
-        const userQuizzes = quizzesSnapshot.docs.map(doc => ({
-          id: doc.id,
-          title: doc.data().title
-        }));
-
-        res.status(200).json({
-          ...safeUserData,
-          quizzes: userQuizzes
-        });
-      } else {
-        res.status(404).json({ error: "User not found" });
+      if (!userData) {
+        return res.status(404).json({ error: "User not found" });
       }
+
+      // Remove sensitive information before sending
+      const { password, ...safeUserData } = userData;
+
+      // Get Firestore instance
+      const db = getFirebaseApp().firestore();
+
+      // Fetch quizzes created by the user
+      const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
+
+      const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        title: doc.data().title
+      }));
+
+      res.status(200).json({
+        ...safeUserData,
+        quizzes: userQuizzes
+      });
     } catch (error) {
       console.error("Error fetching user data:", error);
       res.status(500).json({ error: "Failed to fetch user data" });
@@ -216,8 +213,8 @@ try {
 
       // Create the quiz document
       const quizDocument = {
-        userId: userId,
-        quizId: quizId,
+        userId,
+        quizId,
         ...quizData,
         createdAt: new Date().toISOString()
       };
@@ -225,28 +222,32 @@ try {
       // Get Firestore instance
       const db = getFirebaseApp().firestore();
 
-      // Upload the quiz data to Firestore in a nested collection
-      await db.collection('users').doc(userId).collection('quizzes').doc(quizId).set(quizDocument);
+      // Use a batch write for atomicity
+      const batch = db.batch();
 
-      // Store the quiz title and required fields in a separate collection for easier retrieval
-      await db.collection('quizTitles').doc(quizId).set({
-        userId: userId,
+      // Add quiz to user's quizzes subcollection
+      const userQuizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+      batch.set(userQuizRef, quizDocument);
+
+      // Add quiz title and required fields to quizTitles collection
+      const quizTitleRef = db.collection('quizTitles').doc(quizId);
+      batch.set(quizTitleRef, {
+        userId,
         title: quizData.title,
         requiredFields: quizData.requiredFields,
         createdAt: new Date().toISOString(),
         isPublic: false // Default to private
       });
 
-      res.status(201).json({ message: "Quiz created successfully", quizId: quizId });
+      // Commit the batch
+      await batch.commit();
+
+      res.status(201).json({ message: "Quiz created successfully", quizId });
     } catch (error) {
       console.error("Error creating quiz:", error);
       res.status(500).json({ error: "Failed to create quiz" });
     }
   });
-
-  // Logout Route (Client-side handles token removal)
-  // You can implement token blacklisting if necessary
-
 
   // Toggle Quiz Public Status Route (Protected)
   app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
@@ -259,27 +260,27 @@ try {
 
     try {
       const db = getFirebaseApp().firestore();
-      const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
-      const quizTitleRef = db.collection('quizTitles').doc(quizId);
+      
+      // Use a transaction for atomicity
+      await db.runTransaction(async (transaction) => {
+        const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+        const quizTitleRef = db.collection('quizTitles').doc(quizId);
 
-      // Get both documents
-      const [quizDoc, quizTitleDoc] = await Promise.all([
-        quizRef.get(),
-        quizTitleRef.get()
-      ]);
+        const quizDoc = await transaction.get(quizRef);
+        const quizTitleDoc = await transaction.get(quizTitleRef);
 
-      if (!quizDoc.exists || !quizTitleDoc.exists) {
-        return res.status(404).json({ error: "Quiz not found" });
-      }
+        if (!quizDoc.exists || !quizTitleDoc.exists) {
+          throw new Error("Quiz not found");
+        }
 
-      const quizData = quizDoc.data();
-      const newIsPublic = !quizData.isPublic; // Toggle the isPublic status
+        const quizData = quizDoc.data();
+        const newIsPublic = !quizData.isPublic;
 
-      // Update both documents with the new isPublic status
-      await Promise.all([
-        quizRef.update({ isPublic: newIsPublic }),
-        quizTitleRef.update({ isPublic: newIsPublic })
-      ]);
+        transaction.update(quizRef, { isPublic: newIsPublic });
+        transaction.update(quizTitleRef, { isPublic: newIsPublic });
+
+        return newIsPublic;
+      });
 
       res.status(200).json({ message: "Quiz public status updated successfully", isPublic: newIsPublic });
     } catch (error) {
@@ -287,6 +288,7 @@ try {
       res.status(500).json({ error: "Failed to update quiz public status", details: error.message });
     }
   });
+
   // Get Public Quiz Information Route
   app.get("/public-quiz/:quizId", async (req, res) => {
     const { quizId } = req.params;
@@ -347,7 +349,7 @@ try {
   // Error handling middleware
   app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(500).json({ error: "Something went wrong!" });
+    res.status(500).json({ error: "Something went wrong!", details: err.message });
   });
 
   // Start Server

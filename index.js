@@ -262,7 +262,7 @@ try {
       const db = getFirebaseApp().firestore();
       
       // Use a transaction for atomicity
-      await db.runTransaction(async (transaction) => {
+      const newIsPublic = await db.runTransaction(async (transaction) => {
         const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
         const quizTitleRef = db.collection('quizTitles').doc(quizId);
 
@@ -282,7 +282,7 @@ try {
         return newIsPublic;
       });
 
-      res.status(200).json({ message: "Quiz public status updated successfully", isPublic: newIsPublic });
+      res.status(200).json({ message: "Toggle successful", isPublic: newIsPublic });
     } catch (error) {
       console.error("Error toggling quiz public status:", error);
       res.status(500).json({ error: "Failed to update quiz public status", details: error.message });

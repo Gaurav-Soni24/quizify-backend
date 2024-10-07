@@ -233,7 +233,8 @@ try {
         userId: userId,
         title: quizData.title,
         requiredFields: quizData.requiredFields,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        isPublic: false // Default to private
       });
 
       res.status(201).json({ message: "Quiz created successfully", quizId: quizId });
@@ -245,6 +246,106 @@ try {
 
   // Logout Route (Client-side handles token removal)
   // You can implement token blacklisting if necessary
+
+
+  // Toggle Quiz Public Status Route (Protected)
+  app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { quizId } = req.body;
+
+    if (!quizId) {
+      return res.status(400).json({ error: "Quiz ID is required" });
+    }
+
+    try {
+      const db = getFirebaseApp().firestore();
+      const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+
+      // Get the current quiz document
+      const quizDoc = await quizRef.get();
+
+      if (!quizDoc.exists) {
+        return res.status(404).json({ error: "Quiz not found" });
+      }
+
+      const quizData = quizDoc.data();
+      const newIsPublic = !quizData.isPublic; // Toggle the isPublic status
+
+      // Update the quiz document with the new isPublic status
+      await quizRef.update({ isPublic: newIsPublic });
+
+      // Update the quizTitles collection as well
+      const quizTitleRef = db.collection('quizTitles').doc(quizId);
+      const quizTitleDoc = await quizTitleRef.get();
+
+      if (!quizTitleDoc.exists) {
+        throw new Error("Quiz title document not found");
+      }
+
+      await quizTitleRef.update({ isPublic: newIsPublic });
+
+      res.status(200).json({ message: "Quiz public status updated successfully", isPublic: newIsPublic });
+    } catch (error) {
+      console.error("Error toggling quiz public status:", error);
+      res.status(500).json({ error: "Failed to update quiz public status", details: error.message });
+    }
+  });
+  // Get Public Quiz Information Route
+  app.get("/public-quiz/:quizId", async (req, res) => {
+    const { quizId } = req.params;
+
+    if (!quizId) {
+      return res.status(400).json({ error: "Quiz ID is required" });
+    }
+
+    try {
+      const db = getFirebaseApp().firestore();
+      
+      if (!db) {
+        throw new Error("Firestore database connection failed");
+      }
+      
+      // Fetch the quiz from the quizTitles collection first
+      const quizTitleDoc = await db.collection('quizTitles').doc(quizId).get();
+
+      if (!quizTitleDoc.exists) {
+        return res.status(404).json({ error: "Quiz not found", details: "No quiz matches the provided ID" });
+      }
+
+      const quizTitleData = quizTitleDoc.data();
+
+      if (!quizTitleData.isPublic) {
+        return res.status(403).json({ error: "Access denied", details: "This quiz is not public" });
+      }
+
+      // Fetch the full quiz data from the user's quizzes subcollection
+      const fullQuizDoc = await db.collection('users').doc(quizTitleData.userId).collection('quizzes').doc(quizId).get();
+
+      if (!fullQuizDoc.exists) {
+        return res.status(500).json({ error: "Quiz data is corrupted", details: "Full quiz data not found" });
+      }
+
+      const fullQuizData = fullQuizDoc.data();
+
+      // Remove sensitive information
+      const { userId, ...safeQuizData } = fullQuizData;
+
+      if (Object.keys(safeQuizData).length === 0) {
+        return res.status(500).json({ error: "Quiz data is invalid", details: "No shareable data found in the quiz" });
+      }
+
+      res.status(200).json({ message: "Quiz information retrieved successfully", quiz: safeQuizData });
+    } catch (error) {
+      console.error("Error retrieving public quiz information:", error);
+      if (error.name === "FirebaseError") {
+        res.status(500).json({ error: "Database operation failed", details: error.message });
+      } else if (error instanceof TypeError) {
+        res.status(500).json({ error: "Data processing error", details: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to retrieve quiz information", details: error.message });
+      }
+    }
+  });
 
   // Error handling middleware
   app.use((err, req, res, next) => {

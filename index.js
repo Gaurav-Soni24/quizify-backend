@@ -260,29 +260,26 @@ try {
     try {
       const db = getFirebaseApp().firestore();
       const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+      const quizTitleRef = db.collection('quizTitles').doc(quizId);
 
-      // Get the current quiz document
-      const quizDoc = await quizRef.get();
+      // Get both documents
+      const [quizDoc, quizTitleDoc] = await Promise.all([
+        quizRef.get(),
+        quizTitleRef.get()
+      ]);
 
-      if (!quizDoc.exists) {
+      if (!quizDoc.exists || !quizTitleDoc.exists) {
         return res.status(404).json({ error: "Quiz not found" });
       }
 
       const quizData = quizDoc.data();
       const newIsPublic = !quizData.isPublic; // Toggle the isPublic status
 
-      // Update the quiz document with the new isPublic status
-      await quizRef.update({ isPublic: newIsPublic });
-
-      // Update the quizTitles collection as well
-      const quizTitleRef = db.collection('quizTitles').doc(quizId);
-      const quizTitleDoc = await quizTitleRef.get();
-
-      if (!quizTitleDoc.exists) {
-        throw new Error("Quiz title document not found");
-      }
-
-      await quizTitleRef.update({ isPublic: newIsPublic });
+      // Update both documents with the new isPublic status
+      await Promise.all([
+        quizRef.update({ isPublic: newIsPublic }),
+        quizTitleRef.update({ isPublic: newIsPublic })
+      ]);
 
       res.status(200).json({ message: "Quiz public status updated successfully", isPublic: newIsPublic });
     } catch (error) {

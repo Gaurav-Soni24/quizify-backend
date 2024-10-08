@@ -347,6 +347,56 @@ try {
     }
   });
 
+  app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
+    try {
+      const { quizId } = req.params;
+      const userId = req.user.userId;
+      const db = getFirebaseApp().firestore();
+      
+      if (!db) {
+        throw new Error("Firestore database connection failed");
+      }
+      
+      // Use a transaction to ensure atomicity
+      await db.runTransaction(async (transaction) => {
+        // Fetch the quiz from the quizTitles collection
+        const quizTitleRef = db.collection('quizTitles').doc(quizId);
+        const quizTitleDoc = await transaction.get(quizTitleRef);
+
+        if (!quizTitleDoc.exists) {
+          throw new Error("Quiz not found");
+        }
+
+        const quizTitleData = quizTitleDoc.data();
+
+        // Check if the user is the owner of the quiz
+        if (quizTitleData.userId !== userId) {
+          throw new Error("Unauthorized: You don't have permission to delete this quiz");
+        }
+
+        // Delete the quiz from the quizTitles collection
+        transaction.delete(quizTitleRef);
+
+        // Delete the full quiz data from the user's quizzes subcollection
+        const userQuizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+        transaction.delete(userQuizRef);
+      });
+
+      res.status(200).json({ message: "Quiz deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting quiz:", error);
+      if (error.message === "Quiz not found") {
+        res.status(404).json({ error: "Quiz not found" });
+      } else if (error.message.startsWith("Unauthorized")) {
+        res.status(403).json({ error: error.message });
+      } else if (error.name === "FirebaseError") {
+        res.status(500).json({ error: "Database operation failed", details: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to delete quiz", details: error.message });
+      }
+    }
+  });
+
   // Error handling middleware
   app.use((err, req, res, next) => {
     console.error(err.stack);

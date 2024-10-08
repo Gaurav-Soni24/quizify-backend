@@ -184,7 +184,9 @@ try {
 
       const userQuizzes = quizzesSnapshot.docs.map(doc => ({
         id: doc.id,
-        title: doc.data().title
+        title: doc.data().title,
+        isPublic: doc.data().isPublic,
+        createdAt: doc.data().createdAt
       }));
 
       res.status(200).json({
@@ -253,7 +255,6 @@ try {
   app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { quizId } = req.body;
-
     if (!quizId) {
       return res.status(400).json({ error: "Quiz ID is required" });
     }

@@ -397,6 +397,74 @@ try {
     }
   });
 
+  // Submission Route (Public Access)
+  app.post("/submission", async (req, res) => {
+    const { quizId, userDetails, submittedAt, score, questions } = req.body;
+
+    // Basic validation
+    if (!quizId || !userDetails || !submittedAt || !score || !questions) {
+      return res.status(400).json({ error: "Please provide all required fields." });
+    }
+
+    const email = userDetails.email; // Extract email for document ID
+
+    try {
+      // Get Firestore instance
+      const db = getFirebaseApp().firestore();
+
+      // Create a new document in the submissions collection for the specific quiz
+      const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
+
+      // Prepare submission data
+      const submissionData = {
+        createdAt: new Date().toISOString(),
+        description: req.body.quizDescription,
+        userDetails,
+        submittedAt,
+        score,
+        questions,
+      };
+
+      // Set the submission data
+      await submissionRef.set(submissionData);
+
+      res.status(201).json({ message: "Submission recorded successfully" });
+    } catch (error) {
+      console.error("Error recording submission:", error);
+      res.status(500).json({ error: "Failed to record submission", details: error.message });
+    }
+  });
+
+  // Get User Quiz Submissions Route (Protected)
+  app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
+    const { quizId } = req.params;
+    const userId = req.user.userId;
+
+    try {
+      const db = getFirebaseApp().firestore();
+
+      // Fetch submissions for the specific quiz
+      const submissionsSnapshot = await db.collection('quizzes').doc(quizId).collection('submissions').get();
+
+      if (submissionsSnapshot.empty) {
+        return res.status(404).json({ error: "No submissions found for this quiz" });
+      }
+
+      const submissions = submissionsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      res.status(200).json({
+        message: "Submissions retrieved successfully",
+        submissions
+      });
+    } catch (error) {
+      console.error("Error retrieving quiz submissions:", error);
+      res.status(500).json({ error: "Failed to retrieve quiz submissions", details: error.message });
+    }
+  });
+
   // Error handling middleware
   app.use((err, req, res, next) => {
     console.error(err.stack);

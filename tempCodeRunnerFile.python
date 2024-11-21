@@ -1,0 +1,51 @@
+# Write programs to understand the use of Pandas Functions by Element, Functions by Row or Column, 
+# Statistics Functions, Sorting and Ranking, Correlation and Covariance, “Not a Number” Data. 
+
+
+
+import pandas as pd
+import numpy as np
+
+# Create a sample DataFrame
+df = pd.DataFrame({
+    'A': [1, 2, np.nan, 4, 5],
+    'B': [10, 20, 30, np.nan, 50],
+    'C': [100, 200, 300, 400, 500]
+})
+
+# 1. Element-wise Functions
+print("\n1. Element-wise Operations:")
+print(df['A'] * 2)  # Multiply column A by 2
+print(df['A'] + df['B'])  # Add columns A and B
+
+# 2. Functions by Row/Column
+print("\n2. Row/Column Operations:")
+print("Column sums:", df.sum())  # Sum by column
+print("Row means:", df.mean(axis=1))  # Mean by row
+
+# 3. Statistics Functions
+print("\n3. Statistical Operations:")
+print("Description:\n", df.describe())  # Basic statistics
+print("Median:", df.median())  # Median of each column
+print("Standard deviation:", df.std())  # Standard deviation
+
+# 4. Sorting
+print("\n4. Sorting:")
+print("Sort by column A:\n", df.sort_values(by='A'))  # Sort by column A
+print("Sort by multiple columns:\n", df.sort_values(by=['A', 'B']))  # Sort by A then B
+
+# 5. Ranking
+print("\n5. Ranking:")
+print("Ranks:\n", df.rank())  # Default ranking
+print("Dense ranks:\n", df.rank(method='dense'))  # Dense ranking
+
+# 6. Correlation and Covariance
+print("\n6. Correlation and Covariance:")
+print("Correlation matrix:\n", df.corr())  # Correlation matrix
+print("Covariance matrix:\n", df.cov())  # Covariance matrix
+
+# 7. Handling NaN Data
+print("\n7. NaN Operations:")
+print("Drop NaN:\n", df.dropna())  # Remove rows with NaN
+print("Fill NaN:\n", df.fillna(0))  # Replace NaN with 0
+print("NaN count:", df.isna().sum())  # Count NaN values

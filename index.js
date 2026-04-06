@@ -108,7 +108,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Dashboard Route (Protected)
+// UPDATED: Dashboard Route (Protected) - Now fetches submissions for analytics
 app.get("/dashboard", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -121,16 +121,32 @@ app.get("/dashboard", authenticateToken, async (req, res) => {
     const { password, ...safeUserData } = userData;
     const db = getFirebaseApp().firestore();
 
+    // 1. Fetch all quizzes created by this user
     const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
     const userQuizzes = quizzesSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
 
+    // 2. Fetch all submissions for all of this user's quizzes to build overall analytics
+    let allSubmissions = [];
+    for (const quiz of userQuizzes) {
+      const submissionsSnapshot = await db.collection('quizzes').doc(quiz.id).collection('submissions').get();
+      submissionsSnapshot.forEach(doc => {
+        allSubmissions.push({
+          quizId: quiz.id,
+          quizTitle: quiz.title,
+          submissionId: doc.id,
+          ...doc.data()
+        });
+      });
+    }
+
     res.status(200).json({
       message: "Welcome to the dashboard",
       user: safeUserData,
-      quizzes: userQuizzes
+      quizzes: userQuizzes,
+      submissions: allSubmissions
     });
   } catch (error) {
     console.error("Error accessing dashboard:", error);
@@ -316,7 +332,7 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
   }
 });
 
-// NEW: Verify Attempt (Checks if email already submitted this quiz)
+// Verify Attempt (Checks if email already submitted this quiz)
 app.post("/verify-attempt", async (req, res) => {
   const { quizId, email } = req.body;
   if (!quizId || !email) return res.status(400).json({ error: "Quiz ID and Email are required" });
@@ -336,7 +352,7 @@ app.post("/verify-attempt", async (req, res) => {
   }
 });
 
-// UPDATED: Submission Route (Includes Anti-Cheat flags)
+// Submission Route (Includes Anti-Cheat flags)
 app.post("/submission", async (req, res) => {
   const { quizId, userDetails, submittedAt, score, questions, tabSwitches, wasAutoSubmitted, isFlagged } = req.body;
 
@@ -396,7 +412,7 @@ app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   }
 });
 
-// NEW: Get Submissions by Student Email (For the new Student Portal)
+// Get Submissions by Student Email (For the new Student Portal)
 app.get("/student-submissions/:email", async (req, res) => {
   const { email } = req.params;
   

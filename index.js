@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { OAuth2Client } = require("google-auth-library"); // NEW: Google Auth
+const { OAuth2Client } = require("google-auth-library");
 const {
   initializeFirebase,
   uploadProcessData,
@@ -20,6 +20,7 @@ app.use(cors());
 
 // Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+// Make sure this matches your Vercel Environment Variables exactly!
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"; 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -32,8 +33,12 @@ if (!firebaseApp) {
 
 // Test Route
 app.get("/", (req, res) => {
-  res.send("Server is running");
+  res.send("Quizify Secure Server is running");
 });
+
+// ==========================================
+// TEACHER AUTHENTICATION (JWT)
+// ==========================================
 
 // Register Route
 app.post("/register", async (req, res) => {
@@ -110,6 +115,10 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// ==========================================
+// TEACHER DASHBOARD & QUIZ MANAGEMENT
+// ==========================================
 
 // Dashboard Route (Protected)
 app.get("/dashboard", authenticateToken, async (req, res) => {
@@ -262,40 +271,6 @@ app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
   }
 });
 
-// Get Public Quiz Information Route
-app.get("/public-quiz/:quizId", async (req, res) => {
-  const { quizId } = req.params;
-
-  if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
-
-  try {
-    const db = getFirebaseApp().firestore();
-    const quizTitleDoc = await db.collection('quizTitles').doc(quizId).get();
-
-    if (!quizTitleDoc.exists) {
-      return res.status(404).json({ error: "Quiz not found", details: "No quiz matches the provided ID" });
-    }
-
-    const quizTitleData = quizTitleDoc.data();
-
-    if (!quizTitleData.isPublic) {
-      return res.status(403).json({ error: "Access denied", details: "This quiz is not public" });
-    }
-
-    const fullQuizDoc = await db.collection('users').doc(quizTitleData.userId).collection('quizzes').doc(quizId).get();
-
-    if (!fullQuizDoc.exists) {
-      return res.status(500).json({ error: "Quiz data is corrupted", details: "Full quiz data not found" });
-    }
-
-    const { userId, ...safeQuizData } = fullQuizDoc.data();
-    res.status(200).json({ message: "Quiz information retrieved successfully", quiz: safeQuizData });
-  } catch (error) {
-    console.error("Error retrieving public quiz information:", error);
-    res.status(500).json({ error: "Failed to retrieve quiz information", details: error.message });
-  }
-});
-
 // Delete Quiz
 app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
   try {
@@ -329,13 +304,51 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// STUDENT ATTEMPT & SUBMISSION ROUTES
+// ==========================================
+
+// Get Public Quiz Information Route (For students loading the quiz)
+app.get("/public-quiz/:quizId", async (req, res) => {
+  const { quizId } = req.params;
+
+  if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
+
+  try {
+    const db = getFirebaseApp().firestore();
+    const quizTitleDoc = await db.collection('quizTitles').doc(quizId).get();
+
+    if (!quizTitleDoc.exists) {
+      return res.status(404).json({ error: "Quiz not found", details: "No quiz matches the provided ID" });
+    }
+
+    const quizTitleData = quizTitleDoc.data();
+
+    if (!quizTitleData.isPublic) {
+      return res.status(403).json({ error: "Access denied", details: "This quiz is not public" });
+    }
+
+    const fullQuizDoc = await db.collection('users').doc(quizTitleData.userId).collection('quizzes').doc(quizId).get();
+
+    if (!fullQuizDoc.exists) {
+      return res.status(500).json({ error: "Quiz data is corrupted", details: "Full quiz data not found" });
+    }
+
+    const { userId, ...safeQuizData } = fullQuizDoc.data();
+    res.status(200).json({ message: "Quiz information retrieved successfully", quiz: safeQuizData });
+  } catch (error) {
+    console.error("Error retrieving public quiz information:", error);
+    res.status(500).json({ error: "Failed to retrieve quiz information", details: error.message });
+  }
+});
+
 // NEW: Verify Attempt via Google OAuth Token
 app.post("/verify-google-attempt", async (req, res) => {
   const { quizId, credential } = req.body;
   if (!quizId || !credential) return res.status(400).json({ error: "Quiz ID and Google Credential are required" });
 
   try {
-    // 1. Verify Google Token
+    // 1. Verify Google Token securely using the Google Auth Library
     const ticket = await googleClient.verifyIdToken({
         idToken: credential,
         audience: GOOGLE_CLIENT_ID, 
@@ -344,7 +357,7 @@ app.post("/verify-google-attempt", async (req, res) => {
     const email = payload.email;
     const name = payload.name;
 
-    // 2. Check if already submitted
+    // 2. Check if this student has already submitted an attempt for this quiz
     const db = getFirebaseApp().firestore();
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
     const doc = await submissionRef.get();
@@ -353,7 +366,7 @@ app.post("/verify-google-attempt", async (req, res) => {
       return res.status(403).json({ error: "This Google account has already submitted an attempt for this quiz." });
     }
     
-    // Return verified data to frontend so it can populate the details
+    // 3. Return verified data to frontend
     res.status(200).json({ message: "Google account verified.", email, name });
   } catch (error) {
     console.error("Error verifying Google attempt:", error);
@@ -361,10 +374,12 @@ app.post("/verify-google-attempt", async (req, res) => {
   }
 });
 
-
-// Submission Route (UPDATED with Anti-Cheat flags)
+// Submission Route (UPDATED with Advanced AI Anti-Cheat Metrics)
 app.post("/submission", async (req, res) => {
-  const { quizId, userDetails, submittedAt, score, questions, tabSwitches, webcamStrikes, copyPasteAttempts, wasAutoSubmitted, isFlagged } = req.body;
+  const { 
+    quizId, userDetails, submittedAt, score, questions, 
+    tabSwitches, webcamStrikes, copyPasteAttempts, identitySwapDetected, wasAutoSubmitted, isFlagged 
+  } = req.body;
 
   if (!quizId || !userDetails || !submittedAt || !score || !questions) {
     return res.status(400).json({ error: "Please provide all required fields." });
@@ -383,10 +398,12 @@ app.post("/submission", async (req, res) => {
       submittedAt,
       score,
       questions,
+      // Store all the advanced AI metrics safely in the database
       antiCheat: {
         tabSwitches: tabSwitches || 0,
         webcamStrikes: webcamStrikes || 0,
         copyPasteAttempts: copyPasteAttempts || 0,
+        identitySwapDetected: identitySwapDetected || false,
         wasAutoSubmitted: wasAutoSubmitted || false,
         isFlagged: isFlagged || false
       }
@@ -400,7 +417,11 @@ app.post("/submission", async (req, res) => {
   }
 });
 
-// Get User Quiz Submissions Route (Protected)
+// ==========================================
+// ANALYTICS & DATA RETRIEVAL
+// ==========================================
+
+// Get User Quiz Submissions Route (Protected for Teachers)
 app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   const { quizId } = req.params;
 
@@ -424,7 +445,7 @@ app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   }
 });
 
-// Get Submissions by Student Email
+// Get Submissions by Student Email (For Student Portal)
 app.get("/student-submissions/:email", async (req, res) => {
   const { email } = req.params;
   

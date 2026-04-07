@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library"); // NEW: Google Auth
 const {
   initializeFirebase,
   uploadProcessData,
@@ -17,8 +18,10 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
-// JWT Secret
+// Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"; 
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // Initialize Firebase
 const firebaseApp = initializeFirebase();
@@ -108,7 +111,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// UPDATED: Dashboard Route (Protected) - Now fetches submissions for analytics
+// Dashboard Route (Protected)
 app.get("/dashboard", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -121,14 +124,12 @@ app.get("/dashboard", authenticateToken, async (req, res) => {
     const { password, ...safeUserData } = userData;
     const db = getFirebaseApp().firestore();
 
-    // 1. Fetch all quizzes created by this user
     const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
     const userQuizzes = quizzesSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
 
-    // 2. Fetch all submissions for all of this user's quizzes to build overall analytics
     let allSubmissions = [];
     for (const quiz of userQuizzes) {
       const submissionsSnapshot = await db.collection('quizzes').doc(quiz.id).collection('submissions').get();
@@ -230,9 +231,7 @@ app.post("/create-quiz", authenticateToken, async (req, res) => {
 app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { quizId } = req.body;
-  if (!quizId) {
-    return res.status(400).json({ error: "Quiz ID is required" });
-  }
+  if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
 
   try {
     const db = getFirebaseApp().firestore();
@@ -267,9 +266,7 @@ app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
 app.get("/public-quiz/:quizId", async (req, res) => {
   const { quizId } = req.params;
 
-  if (!quizId) {
-    return res.status(400).json({ error: "Quiz ID is required" });
-  }
+  if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
 
   try {
     const db = getFirebaseApp().firestore();
@@ -332,29 +329,42 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
   }
 });
 
-// Verify Attempt (Checks if email already submitted this quiz)
-app.post("/verify-attempt", async (req, res) => {
-  const { quizId, email } = req.body;
-  if (!quizId || !email) return res.status(400).json({ error: "Quiz ID and Email are required" });
+// NEW: Verify Attempt via Google OAuth Token
+app.post("/verify-google-attempt", async (req, res) => {
+  const { quizId, credential } = req.body;
+  if (!quizId || !credential) return res.status(400).json({ error: "Quiz ID and Google Credential are required" });
 
   try {
+    // 1. Verify Google Token
+    const ticket = await googleClient.verifyIdToken({
+        idToken: credential,
+        audience: GOOGLE_CLIENT_ID, 
+    });
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const name = payload.name;
+
+    // 2. Check if already submitted
     const db = getFirebaseApp().firestore();
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
     const doc = await submissionRef.get();
 
     if (doc.exists) {
-      return res.status(403).json({ error: "This email has already submitted an attempt for this quiz." });
+      return res.status(403).json({ error: "This Google account has already submitted an attempt for this quiz." });
     }
-    res.status(200).json({ message: "Email verified for attempt." });
+    
+    // Return verified data to frontend so it can populate the details
+    res.status(200).json({ message: "Google account verified.", email, name });
   } catch (error) {
-    console.error("Error verifying attempt:", error);
-    res.status(500).json({ error: "Failed to verify attempt details" });
+    console.error("Error verifying Google attempt:", error);
+    res.status(401).json({ error: "Invalid or expired Google authentication." });
   }
 });
 
-// Submission Route (Includes Anti-Cheat flags)
+
+// Submission Route (UPDATED with Anti-Cheat flags)
 app.post("/submission", async (req, res) => {
-  const { quizId, userDetails, submittedAt, score, questions, tabSwitches, wasAutoSubmitted, isFlagged } = req.body;
+  const { quizId, userDetails, submittedAt, score, questions, tabSwitches, webcamStrikes, copyPasteAttempts, wasAutoSubmitted, isFlagged } = req.body;
 
   if (!quizId || !userDetails || !submittedAt || !score || !questions) {
     return res.status(400).json({ error: "Please provide all required fields." });
@@ -375,6 +385,8 @@ app.post("/submission", async (req, res) => {
       questions,
       antiCheat: {
         tabSwitches: tabSwitches || 0,
+        webcamStrikes: webcamStrikes || 0,
+        copyPasteAttempts: copyPasteAttempts || 0,
         wasAutoSubmitted: wasAutoSubmitted || false,
         isFlagged: isFlagged || false
       }
@@ -412,7 +424,7 @@ app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   }
 });
 
-// Get Submissions by Student Email (For the new Student Portal)
+// Get Submissions by Student Email
 app.get("/student-submissions/:email", async (req, res) => {
   const { email } = req.params;
   
@@ -420,7 +432,6 @@ app.get("/student-submissions/:email", async (req, res) => {
 
   try {
     const db = getFirebaseApp().firestore();
-    // Use Collection Group query to find submissions across all quizzes matching the email
     const submissionsSnapshot = await db.collectionGroup('submissions')
                                       .where('userDetails.email', '==', email)
                                       .get();
@@ -431,7 +442,6 @@ app.get("/student-submissions/:email", async (req, res) => {
 
     const submissions = submissionsSnapshot.docs.map(doc => {
       const data = doc.data();
-      // Extract Quiz ID from the reference path (quizzes/{quizId}/submissions/{email})
       const quizId = doc.ref.parent.parent.id; 
       return {
         quizId,

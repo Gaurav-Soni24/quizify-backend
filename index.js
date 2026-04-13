@@ -48,7 +48,12 @@ function getGeminiModel(modelType = "gemini-2.5-flash") {
   currentGeminiKeyIndex = (currentGeminiKeyIndex + 1) % GEMINI_API_KEYS.length;
   
   const genAI = new GoogleGenerativeAI(key);
-  return genAI.getGenerativeModel({ model: modelType });
+  
+  // FIX: Force Native JSON response to speed up generation and prevent markdown parsing errors
+  return genAI.getGenerativeModel({ 
+      model: modelType,
+      generationConfig: { responseMimeType: "application/json" } 
+  });
 }
 
 // ==========================================
@@ -129,7 +134,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ==========================================
-// RESTORED: TEACHER DASHBOARD & QUIZ MANAGEMENT
+// TEACHER DASHBOARD & QUIZ MANAGEMENT
 // ==========================================
 app.get("/dashboard", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -279,8 +284,9 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
   }
 
   try {
-    // Explicitly using gemini-2.5-flash for reliability and free tier availability
     const model = getGeminiModel("gemini-2.5-flash");
+    
+    // Adjusted prompt slightly to align perfectly with the JSON MimeType
     const prompt = `
       You are an expert educator. Generate a quiz based on the following:
       Topic: ${topic}
@@ -288,11 +294,11 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
       Field of Study: ${field || "General"}
       Difficulty: ${difficulty}
 
-      Generate exectly 5 questions. Include a mix of 'single' (multiple choice with one correct answer), 'multiple' (multiple choice with multiple correct answers), 'integer', and 'text' (short answer) questions.
+      Generate exactly 5 questions. Include a mix of 'single' (multiple choice with one correct answer), 'multiple' (multiple choice with multiple correct answers), 'integer', and 'text' (short answer) questions.
 
       Also, recommend a timeLimit (in minutes) and antiCheat settings based on the difficulty.
       
-      Respond strictly in the following JSON format without Markdown blocks or extra text:
+      Respond strictly in the following JSON schema:
       {
         "recommendedTimeLimit": 30,
         "recommendedAntiCheat": {
@@ -320,22 +326,12 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
       }
     `;
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("AI timeout")), 8000)
-    );
-
-    const result = await Promise.race([
-      model.generateContent(prompt),
-      timeoutPromise
-    ]);
+    const result = await model.generateContent(prompt);
     
-    let aiResponse = result.response.text().trim();
-    
-    if (aiResponse.startsWith("```json")) {
-      aiResponse = aiResponse.replace(/^```json/, "").replace(/```$/, "").trim();
-    }
-
+    // FIX: Parse directly. No need to strip markdown since we are using application/json config
+    const aiResponse = result.response.text();
     const generatedData = JSON.parse(aiResponse);
+    
     res.status(200).json(generatedData);
   } catch (error) {
     console.error("AI Generation Error:", error);
@@ -478,7 +474,7 @@ app.post("/submission", async (req, res) => {
     const manualGradeQuestions = questions.filter(q => q.questionType === 'text' || q.questionType === 'code');
     
     if (manualGradeQuestions.length > 0) {
-      const model = getGeminiModel("gemini-2.5-flash"); // Changed here as well
+      const model = getGeminiModel("gemini-2.5-flash"); 
       
       const gradingPrompt = `
         You are a strict but fair automated grader. I will provide a list of student answers.
@@ -494,7 +490,7 @@ app.post("/submission", async (req, res) => {
           maxMarks: q.marks
         })))}
 
-        Respond strictly in JSON format representing an array of objects:
+        Respond strictly in JSON array format representing objects:
         [
           { "questionId": 0, "awardedMarks": 2, "isCorrect": true, "feedback": "Good explanation." }
         ]
@@ -502,9 +498,9 @@ app.post("/submission", async (req, res) => {
 
       try {
         const result = await model.generateContent(gradingPrompt);
-        let aiResponse = result.response.text().trim();
-        if (aiResponse.startsWith("```json")) aiResponse = aiResponse.replace(/^```json/, "").replace(/```$/, "").trim();
         
+        // FIX: Parse directly, taking advantage of the application/json MIME type
+        const aiResponse = result.response.text();
         const gradingResults = JSON.parse(aiResponse);
 
         gradingResults.forEach(gradedQ => {
@@ -552,7 +548,7 @@ app.post("/submission", async (req, res) => {
   }
 });
 
-// RESTORED: Get User Quiz Submissions Route (Protected for Teachers)
+// Get User Quiz Submissions Route
 app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   const { quizId } = req.params;
 
@@ -576,7 +572,7 @@ app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
   }
 });
 
-// RESTORED: Get Submissions by Student Email (For Student Portal)
+// Get Submissions by Student Email
 app.get("/student-submissions/:email", async (req, res) => {
   const { email } = req.params;
   

@@ -274,7 +274,7 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// AI GENERATION & CREATE QUIZ
+// AI GENERATION & CREATE Questions
 // ==========================================
 app.post("/generate-questions", authenticateToken, async (req, res) => {
   const { topic, description, field, difficulty } = req.body;

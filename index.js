@@ -3,7 +3,6 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const {
   initializeFirebase,
   uploadProcessData,
@@ -23,38 +22,6 @@ app.use(cors());
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"; 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-
-// ==========================================
-// GEMINI API KEY ROTATION (7 Keys)
-// ==========================================
-const GEMINI_API_KEYS = [
-  process.env.GEMINI_KEY_1,
-  process.env.GEMINI_KEY_2,
-  process.env.GEMINI_KEY_3,
-  process.env.GEMINI_KEY_4,
-  process.env.GEMINI_KEY_5,
-  process.env.GEMINI_KEY_6,
-  process.env.GEMINI_KEY_7
-].filter(Boolean);
-
-let currentGeminiKeyIndex = 0;
-
-function getGeminiModel(modelType = "gemini-2.5-flash") {
-  if (GEMINI_API_KEYS.length === 0) {
-    throw new Error("No Gemini API keys configured.");
-  }
-  const key = GEMINI_API_KEYS[currentGeminiKeyIndex];
-  // Rotate key for next use
-  currentGeminiKeyIndex = (currentGeminiKeyIndex + 1) % GEMINI_API_KEYS.length;
-  
-  const genAI = new GoogleGenerativeAI(key);
-  
-  // FIX: Force Native JSON response to speed up generation and prevent markdown parsing errors
-  return genAI.getGenerativeModel({ 
-      model: modelType,
-      generationConfig: { responseMimeType: "application/json" } 
-  });
-}
 
 // ==========================================
 // INITIALIZE FIREBASE SAFELY
@@ -274,102 +241,8 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// AI GENERATION & CREATE Questions
+// CREATE QUIZ (AI logic removed, directly saves data)
 // ==========================================
-app.post("/generate-questions", authenticateToken, async (req, res) => {
-  const { topic, description, field, difficulty } = req.body;
-
-  if (!topic || !difficulty) {
-    return res.status(400).json({ error: "Topic and difficulty are required." });
-  }
-
-  try {
-    const model = getGeminiModel("gemini-2.5-flash");
-    
-    const prompt = `
-      You are an expert educator. Generate a quiz based on the following:
-      Topic: ${topic}
-      Description/Context: ${description || "General knowledge"}
-      Field of Study: ${field || "General"}
-      Difficulty: ${difficulty}
-
-      Generate exactly 5 questions. Include a mix of 'single' (multiple choice with one correct answer), 'multiple' (multiple choice with multiple correct answers), 'integer', and 'text' (short answer) questions.
-
-      Also, recommend a timeLimit (in minutes) and antiCheat settings based on the difficulty.
-      
-      Respond strictly in the following JSON schema:
-      {
-        "recommendedTimeLimit": 30,
-        "recommendedAntiCheat": {
-          "copyPaste": true,
-          "tabSwitch": true,
-          "aiCamera": true
-        },
-        "questions": [
-          {
-            "type": "single",
-            "text": "Question text here?",
-            "marks": 2,
-            "options": [
-              { "text": "Option 1", "isCorrect": true },
-              { "text": "Option 2", "isCorrect": false }
-            ]
-          },
-          {
-            "type": "text",
-            "text": "Explain the concept of...",
-            "marks": 5,
-            "correctAnswer": "A brief explanation indicating..."
-          }
-        ]
-      }
-    `;
-
-    // Configuration to speed up the model's response time
-    const generationConfig = {
-      responseMimeType: "application/json",
-      maxOutputTokens: 1500, // Capping tokens forces a faster response
-      temperature: 0.4,      // Lower temperature makes it more direct and less "chatty"
-    };
-
-    let retries = 2; // Try up to 2 times
-    let generatedData = null;
-
-    while (retries > 0) {
-      try {
-        // We pass the generationConfig and an explicit request timeout (15 seconds)
-        const result = await model.generateContent(
-          {
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig
-          },
-          { timeout: 15000 } // Force it to timeout after 15s instead of hanging
-        );
-        
-        const aiResponse = result.response.text();
-        generatedData = JSON.parse(aiResponse);
-        
-        break; // If successful, break out of the retry loop
-      } catch (attemptError) {
-        console.warn(`AI attempt failed. Retries left: ${retries - 1}. Reason: ${attemptError.message}`);
-        retries--;
-        
-        if (retries === 0) {
-          throw new Error(attemptError.message || "AI timeout after multiple attempts");
-        }
-        
-        // Wait 1.5 seconds before trying again to let the network breathe
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      }
-    }
-    
-    res.status(200).json(generatedData);
-  } catch (error) {
-    console.error("AI Generation Error:", error);
-    res.status(500).json({ error: "Failed to generate questions with AI.", details: error.message });
-  }
-});
-
 app.post("/create-quiz", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const quizData = req.body;
@@ -491,6 +364,7 @@ app.post("/start-attempt", async (req, res) => {
     }
 });
 
+// Submission route now just receives the fully graded payload from the frontend
 app.post("/submission", async (req, res) => {
   const payload = req.body;
   const { quizId, userDetails, submittedAt, score, questions } = payload;
@@ -502,55 +376,6 @@ app.post("/submission", async (req, res) => {
   const email = userDetails.email;
 
   try {
-    const manualGradeQuestions = questions.filter(q => q.questionType === 'text' || q.questionType === 'code');
-    
-    if (manualGradeQuestions.length > 0) {
-      const model = getGeminiModel("gemini-2.5-flash"); 
-      
-      const gradingPrompt = `
-        You are a strict but fair automated grader. I will provide a list of student answers.
-        Evaluate each answer based on the provided correct answer/rubric.
-        Assign marks between 0 and the max marks for that question. Partial credit is allowed.
-        
-        Student Answers to Grade:
-        ${JSON.stringify(manualGradeQuestions.map(q => ({
-          questionId: q.originalIndex,
-          question: q.questionText,
-          studentAnswer: q.userAnswer,
-          correctAnswerRubric: q.correctAnswer,
-          maxMarks: q.marks
-        })))}
-
-        Respond strictly in JSON array format representing objects:
-        [
-          { "questionId": 0, "awardedMarks": 2, "isCorrect": true, "feedback": "Good explanation." }
-        ]
-      `;
-
-      try {
-        const result = await model.generateContent(gradingPrompt);
-        
-        // FIX: Parse directly, taking advantage of the application/json MIME type
-        const aiResponse = result.response.text();
-        const gradingResults = JSON.parse(aiResponse);
-
-        gradingResults.forEach(gradedQ => {
-            const questionIndex = questions.findIndex(q => q.originalIndex === gradedQ.questionId);
-            if(questionIndex !== -1) {
-                questions[questionIndex].marksObtained = gradedQ.awardedMarks;
-                questions[questionIndex].isCorrect = gradedQ.awardedMarks > 0;
-                questions[questionIndex].aiFeedback = gradedQ.feedback;
-                score.obtainedMarks += gradedQ.awardedMarks;
-            }
-        });
-
-        score.percentage = parseFloat(((score.obtainedMarks / score.totalMarks) * 100).toFixed(2));
-
-      } catch (aiError) {
-        console.error("AI Grading failed. Defaulting to 0 for manual questions.", aiError);
-      }
-    }
-
     const db = getFirebaseApp().firestore();
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
 
@@ -572,7 +397,7 @@ app.post("/submission", async (req, res) => {
     };
 
     await submissionRef.set(submissionData);
-    res.status(201).json({ message: "Submission recorded and graded successfully", score });
+    res.status(201).json({ message: "Submission recorded successfully", score });
   } catch (error) {
     console.error("Error recording submission:", error);
     res.status(500).json({ error: "Failed to record submission", details: error.message });

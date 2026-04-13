@@ -286,7 +286,6 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
   try {
     const model = getGeminiModel("gemini-2.5-flash");
     
-    // Adjusted prompt slightly to align perfectly with the JSON MimeType
     const prompt = `
       You are an expert educator. Generate a quiz based on the following:
       Topic: ${topic}
@@ -326,11 +325,43 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
       }
     `;
 
-    const result = await model.generateContent(prompt);
-    
-    // FIX: Parse directly. No need to strip markdown since we are using application/json config
-    const aiResponse = result.response.text();
-    const generatedData = JSON.parse(aiResponse);
+    // Configuration to speed up the model's response time
+    const generationConfig = {
+      responseMimeType: "application/json",
+      maxOutputTokens: 1500, // Capping tokens forces a faster response
+      temperature: 0.4,      // Lower temperature makes it more direct and less "chatty"
+    };
+
+    let retries = 2; // Try up to 2 times
+    let generatedData = null;
+
+    while (retries > 0) {
+      try {
+        // We pass the generationConfig and an explicit request timeout (15 seconds)
+        const result = await model.generateContent(
+          {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig
+          },
+          { timeout: 15000 } // Force it to timeout after 15s instead of hanging
+        );
+        
+        const aiResponse = result.response.text();
+        generatedData = JSON.parse(aiResponse);
+        
+        break; // If successful, break out of the retry loop
+      } catch (attemptError) {
+        console.warn(`AI attempt failed. Retries left: ${retries - 1}. Reason: ${attemptError.message}`);
+        retries--;
+        
+        if (retries === 0) {
+          throw new Error(attemptError.message || "AI timeout after multiple attempts");
+        }
+        
+        // Wait 1.5 seconds before trying again to let the network breathe
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+    }
     
     res.status(200).json(generatedData);
   } catch (error) {

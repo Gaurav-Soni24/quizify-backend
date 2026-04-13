@@ -279,8 +279,8 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
   }
 
   try {
-    // Explicitly using gemini-1.5-flash for reliability and free tier availability
-    const model = getGeminiModel("gemini-1.5-flash");
+    // Explicitly using gemini-2.5-flash for reliability and free tier availability
+    const model = getGeminiModel("gemini-2.5-flash");
     const prompt = `
       You are an expert educator. Generate a quiz based on the following:
       Topic: ${topic}
@@ -470,7 +470,7 @@ app.post("/submission", async (req, res) => {
     const manualGradeQuestions = questions.filter(q => q.questionType === 'text' || q.questionType === 'code');
     
     if (manualGradeQuestions.length > 0) {
-      const model = getGeminiModel("gemini-1.5-flash"); // Changed here as well
+      const model = getGeminiModel("gemini-2.5-flash"); // Changed here as well
       
       const gradingPrompt = `
         You are a strict but fair automated grader. I will provide a list of student answers.

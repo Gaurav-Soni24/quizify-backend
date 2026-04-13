@@ -30,8 +30,12 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const GEMINI_API_KEYS = [
   process.env.GEMINI_KEY_1,
   process.env.GEMINI_KEY_2,
-  process.env.GEMINI_KEY_3
-].filter(Boolean); // Only keeps keys that are actually defined
+  process.env.GEMINI_KEY_3,
+  process.env.GEMINI_KEY_4,
+  process.env.GEMINI_KEY_5,
+  process.env.GEMINI_KEY_6,
+  process.env.GEMINI_KEY_7
+].filter(Boolean);
 
 let currentGeminiKeyIndex = 0;
 
@@ -40,29 +44,31 @@ function getGeminiModel(modelType = "gemini-1.5-pro") {
     throw new Error("No Gemini API keys configured.");
   }
   const key = GEMINI_API_KEYS[currentGeminiKeyIndex];
-  // Rotate key for next use
   currentGeminiKeyIndex = (currentGeminiKeyIndex + 1) % GEMINI_API_KEYS.length;
   
   const genAI = new GoogleGenerativeAI(key);
   return genAI.getGenerativeModel({ model: modelType });
 }
 
-// Initialize Firebase
-const firebaseApp = initializeFirebase();
-if (!firebaseApp) {
-  console.error("Failed to initialize Firebase. Exiting...");
-  process.exit(1);
+// ==========================================
+// INITIALIZE FIREBASE SAFELY
+// ==========================================
+try {
+  initializeFirebase();
+} catch (error) {
+  // We log the error but DO NOT use process.exit(1) here. 
+  // Killing the process causes Vercel 500 crashes.
+  console.error("Failed to initialize Firebase. Please check Vercel Environment Variables.");
 }
 
 // Test Route
 app.get("/", (req, res) => {
-  res.send("Quizify Secure Server is running");
+  res.send("Quizify Secure Server is running smoothly");
 });
 
 // ==========================================
 // TEACHER AUTHENTICATION (JWT)
 // ==========================================
-// Register Route
 app.post("/register", async (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password || !role) {
@@ -85,7 +91,6 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// Login Route
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -127,8 +132,6 @@ const authenticateToken = (req, res, next) => {
 // ==========================================
 // TEACHER DASHBOARD & AI GENERATION
 // ==========================================
-
-// AI Question Generator Route
 app.post("/generate-questions", authenticateToken, async (req, res) => {
   const { topic, description, field, difficulty } = req.body;
 
@@ -180,7 +183,6 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
     const result = await model.generateContent(prompt);
     let aiResponse = result.response.text().trim();
     
-    // Clean up potential markdown formatting from Gemini
     if (aiResponse.startsWith("```json")) {
       aiResponse = aiResponse.replace(/^```json/, "").replace(/```$/, "").trim();
     }
@@ -193,7 +195,6 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
   }
 });
 
-// Create Quiz Route
 app.post("/create-quiz", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const quizData = req.body;
@@ -205,7 +206,6 @@ app.post("/create-quiz", authenticateToken, async (req, res) => {
 
     const quizId = `quiz_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Ensure anti-cheat settings have defaults if not provided
     const antiCheatSettings = quizData.antiCheatSettings || {
       copyPaste: true,
       tabSwitch: true,
@@ -246,7 +246,6 @@ app.post("/create-quiz", authenticateToken, async (req, res) => {
 // ==========================================
 // STUDENT ATTEMPT & SUBMISSION ROUTES
 // ==========================================
-
 app.get("/public-quiz/:quizId", async (req, res) => {
   const { quizId } = req.params;
   if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
@@ -269,7 +268,6 @@ app.get("/public-quiz/:quizId", async (req, res) => {
   }
 });
 
-// Verify Google Attempt (Checks for Started or Submitted status)
 app.post("/verify-google-attempt", async (req, res) => {
   const { quizId, credential } = req.body;
   if (!quizId || !credential) return res.status(400).json({ error: "Missing parameters" });
@@ -284,14 +282,12 @@ app.post("/verify-google-attempt", async (req, res) => {
 
     const db = getFirebaseApp().firestore();
     
-    // 1. Check if fully submitted
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
     const subDoc = await submissionRef.get();
     if (subDoc.exists) {
       return res.status(403).json({ error: "You have already completed and submitted this quiz." });
     }
 
-    // 2. Check if already started but abandoned (Reloaded page)
     const startedRef = db.collection('quizzes').doc(quizId).collection('startedAttempts').doc(email);
     const startDoc = await startedRef.get();
     if (startDoc.exists) {
@@ -305,7 +301,6 @@ app.post("/verify-google-attempt", async (req, res) => {
   }
 });
 
-// Lock-in the user so they can't reload
 app.post("/start-attempt", async (req, res) => {
     const { quizId, email } = req.body;
     if(!quizId || !email) return res.status(400).json({ error: "Missing data" });
@@ -321,7 +316,6 @@ app.post("/start-attempt", async (req, res) => {
     }
 });
 
-// Auto-Grading & Submission Route
 app.post("/submission", async (req, res) => {
   const payload = req.body;
   const { quizId, userDetails, submittedAt, score, questions } = payload;
@@ -333,7 +327,6 @@ app.post("/submission", async (req, res) => {
   const email = userDetails.email;
 
   try {
-    // 1. Filter out text and code questions that need AI grading
     const manualGradeQuestions = questions.filter(q => q.questionType === 'text' || q.questionType === 'code');
     
     if (manualGradeQuestions.length > 0) {
@@ -366,28 +359,23 @@ app.post("/submission", async (req, res) => {
         
         const gradingResults = JSON.parse(aiResponse);
 
-        // Update the payload with AI graded results
         gradingResults.forEach(gradedQ => {
             const questionIndex = questions.findIndex(q => q.originalIndex === gradedQ.questionId);
             if(questionIndex !== -1) {
                 questions[questionIndex].marksObtained = gradedQ.awardedMarks;
-                questions[questionIndex].isCorrect = gradedQ.awardedMarks > 0; // Considered partially/fully correct
+                questions[questionIndex].isCorrect = gradedQ.awardedMarks > 0;
                 questions[questionIndex].aiFeedback = gradedQ.feedback;
-                // Add to total score
                 score.obtainedMarks += gradedQ.awardedMarks;
             }
         });
 
-        // Recalculate percentage
         score.percentage = parseFloat(((score.obtainedMarks / score.totalMarks) * 100).toFixed(2));
 
       } catch (aiError) {
         console.error("AI Grading failed. Defaulting to 0 for manual questions.", aiError);
-        // Fallback: marks remain 0 if AI fails
       }
     }
 
-    // 2. Save final submission to Firestore
     const db = getFirebaseApp().firestore();
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
 
@@ -417,13 +405,19 @@ app.post("/submission", async (req, res) => {
 });
 
 // ==========================================
-// ERROR HANDLING & SERVER START
+// ERROR HANDLING & EXPORT
 // ==========================================
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: "Something went wrong!", details: err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+// IMPORTANT: Allow local testing with app.listen, but export app for Vercel Serverless
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+// Vercel relies on exporting the app to map the serverless functions properly
+module.exports = app;

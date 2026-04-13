@@ -39,7 +39,7 @@ const GEMINI_API_KEYS = [
 
 let currentGeminiKeyIndex = 0;
 
-function getGeminiModel(modelType = "gemini-1.5-pro") {
+function getGeminiModel(modelType = "gemini-2.5-flash") {
   if (GEMINI_API_KEYS.length === 0) {
     throw new Error("No Gemini API keys configured.");
   }

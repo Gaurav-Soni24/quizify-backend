@@ -30,16 +30,12 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const GEMINI_API_KEYS = [
   process.env.GEMINI_KEY_1,
   process.env.GEMINI_KEY_2,
-  process.env.GEMINI_KEY_3,
-  process.env.GEMINI_KEY_4,
-  process.env.GEMINI_KEY_5,
-  process.env.GEMINI_KEY_6,
-  process.env.GEMINI_KEY_7
+  process.env.GEMINI_KEY_3
 ].filter(Boolean);
 
 let currentGeminiKeyIndex = 0;
 
-function getGeminiModel(modelType = "gemini-2.5-flash") {
+function getGeminiModel(modelType = "gemini-1.5-pro") {
   if (GEMINI_API_KEYS.length === 0) {
     throw new Error("No Gemini API keys configured.");
   }
@@ -56,8 +52,6 @@ function getGeminiModel(modelType = "gemini-2.5-flash") {
 try {
   initializeFirebase();
 } catch (error) {
-  // We log the error but DO NOT use process.exit(1) here. 
-  // Killing the process causes Vercel 500 crashes.
   console.error("Failed to initialize Firebase. Please check Vercel Environment Variables.");
 }
 
@@ -130,7 +124,147 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ==========================================
-// TEACHER DASHBOARD & AI GENERATION
+// RESTORED: TEACHER DASHBOARD & QUIZ MANAGEMENT
+// ==========================================
+app.get("/dashboard", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  try {
+    const userData = await downloadProcessData("users", userId);
+    if (!userData) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const { password, ...safeUserData } = userData;
+    const db = getFirebaseApp().firestore();
+
+    const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
+    const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    let allSubmissions = [];
+    for (const quiz of userQuizzes) {
+      const submissionsSnapshot = await db.collection('quizzes').doc(quiz.id).collection('submissions').get();
+      submissionsSnapshot.forEach(doc => {
+        allSubmissions.push({
+          quizId: quiz.id,
+          quizTitle: quiz.title,
+          submissionId: doc.id,
+          ...doc.data()
+        });
+      });
+    }
+
+    res.status(200).json({
+      message: "Welcome to the dashboard",
+      user: safeUserData,
+      quizzes: userQuizzes,
+      submissions: allSubmissions
+    });
+  } catch (error) {
+    console.error("Error accessing dashboard:", error);
+    res.status(500).json({ error: "Failed to access dashboard" });
+  }
+});
+
+app.get("/user/:userId", authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userData = await downloadProcessData("users", userId);
+    if (!userData) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const { password, ...safeUserData } = userData;
+    const db = getFirebaseApp().firestore();
+
+    const quizzesSnapshot = await db.collection('users').doc(userId).collection('quizzes').get();
+    const userQuizzes = quizzesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      title: doc.data().title,
+      isPublic: doc.data().isPublic,
+      createdAt: doc.data().createdAt
+    }));
+
+    res.status(200).json({
+      ...safeUserData,
+      quizzes: userQuizzes
+    });
+  } catch (error) {
+    console.error("Error fetching user data:", error);
+    res.status(500).json({ error: "Failed to fetch user data" });
+  }
+});
+
+app.post("/toggle-quiz-public", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { quizId } = req.body;
+  if (!quizId) return res.status(400).json({ error: "Quiz ID is required" });
+
+  try {
+    const db = getFirebaseApp().firestore();
+    const newIsPublic = await db.runTransaction(async (transaction) => {
+      const quizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+      const quizTitleRef = db.collection('quizTitles').doc(quizId);
+
+      const quizDoc = await transaction.get(quizRef);
+      const quizTitleDoc = await transaction.get(quizTitleRef);
+
+      if (!quizDoc.exists || !quizTitleDoc.exists) {
+        throw new Error("Quiz not found");
+      }
+
+      const quizData = quizDoc.data();
+      const newIsPublic = !quizData.isPublic;
+
+      transaction.update(quizRef, { isPublic: newIsPublic });
+      transaction.update(quizTitleRef, { isPublic: newIsPublic });
+
+      return newIsPublic;
+    });
+
+    res.status(200).json({ message: "Toggle successful", isPublic: newIsPublic });
+  } catch (error) {
+    console.error("Error toggling quiz public status:", error);
+    res.status(500).json({ error: "Failed to update quiz public status", details: error.message });
+  }
+});
+
+app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const userId = req.user.userId;
+    const db = getFirebaseApp().firestore();
+    
+    await db.runTransaction(async (transaction) => {
+      const quizTitleRef = db.collection('quizTitles').doc(quizId);
+      const quizTitleDoc = await transaction.get(quizTitleRef);
+
+      if (!quizTitleDoc.exists) {
+        throw new Error("Quiz not found");
+      }
+
+      if (quizTitleDoc.data().userId !== userId) {
+        throw new Error("Unauthorized: You don't have permission to delete this quiz");
+      }
+
+      transaction.delete(quizTitleRef);
+      const userQuizRef = db.collection('users').doc(userId).collection('quizzes').doc(quizId);
+      transaction.delete(userQuizRef);
+    });
+
+    res.status(200).json({ message: "Quiz deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting quiz:", error);
+    if (error.message === "Quiz not found") return res.status(404).json({ error: "Quiz not found" });
+    if (error.message.startsWith("Unauthorized")) return res.status(403).json({ error: error.message });
+    res.status(500).json({ error: "Failed to delete quiz", details: error.message });
+  }
+});
+
+// ==========================================
+// AI GENERATION & CREATE QUIZ
 // ==========================================
 app.post("/generate-questions", authenticateToken, async (req, res) => {
   const { topic, description, field, difficulty } = req.body;
@@ -244,7 +378,7 @@ app.post("/create-quiz", authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// STUDENT ATTEMPT & SUBMISSION ROUTES
+// STUDENT ATTEMPT, SUBMISSION & ANALYTICS
 // ==========================================
 app.get("/public-quiz/:quizId", async (req, res) => {
   const { quizId } = req.params;
@@ -404,6 +538,63 @@ app.post("/submission", async (req, res) => {
   }
 });
 
+// RESTORED: Get User Quiz Submissions Route (Protected for Teachers)
+app.get("/quiz-submissions/:quizId", authenticateToken, async (req, res) => {
+  const { quizId } = req.params;
+
+  try {
+    const db = getFirebaseApp().firestore();
+    const submissionsSnapshot = await db.collection('quizzes').doc(quizId).collection('submissions').get();
+
+    if (submissionsSnapshot.empty) {
+      return res.status(404).json({ error: "No submissions found for this quiz" });
+    }
+
+    const submissions = submissionsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.status(200).json({ message: "Submissions retrieved successfully", submissions });
+  } catch (error) {
+    console.error("Error retrieving quiz submissions:", error);
+    res.status(500).json({ error: "Failed to retrieve quiz submissions", details: error.message });
+  }
+});
+
+// RESTORED: Get Submissions by Student Email (For Student Portal)
+app.get("/student-submissions/:email", async (req, res) => {
+  const { email } = req.params;
+  
+  if (!email) return res.status(400).json({ error: "Email is required" });
+
+  try {
+    const db = getFirebaseApp().firestore();
+    const submissionsSnapshot = await db.collectionGroup('submissions')
+                                      .where('userDetails.email', '==', email)
+                                      .get();
+
+    if (submissionsSnapshot.empty) {
+      return res.status(404).json({ error: "No submissions found for this email" });
+    }
+
+    const submissions = submissionsSnapshot.docs.map(doc => {
+      const data = doc.data();
+      const quizId = doc.ref.parent.parent.id; 
+      return {
+        quizId,
+        id: doc.id,
+        ...data
+      };
+    });
+
+    res.status(200).json({ message: "Student records retrieved successfully", submissions });
+  } catch (error) {
+    console.error("Error retrieving student submissions:", error);
+    res.status(500).json({ error: "Failed to retrieve student records", details: error.message });
+  }
+});
+
 // ==========================================
 // ERROR HANDLING & EXPORT
 // ==========================================
@@ -412,12 +603,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something went wrong!", details: err.message });
 });
 
-// IMPORTANT: Allow local testing with app.listen, but export app for Vercel Serverless
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });
 }
 
-// Vercel relies on exporting the app to map the serverless functions properly
 module.exports = app;

@@ -288,7 +288,7 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
       Field of Study: ${field || "General"}
       Difficulty: ${difficulty}
 
-      Generate 10 to 15 questions. Include a mix of 'single' (multiple choice with one correct answer), 'multiple' (multiple choice with multiple correct answers), 'integer', and 'text' (short answer) questions.
+      Generate exectly 5 questions. Include a mix of 'single' (multiple choice with one correct answer), 'multiple' (multiple choice with multiple correct answers), 'integer', and 'text' (short answer) questions.
 
       Also, recommend a timeLimit (in minutes) and antiCheat settings based on the difficulty.
       
@@ -320,7 +320,15 @@ app.post("/generate-questions", authenticateToken, async (req, res) => {
       }
     `;
 
-    const result = await model.generateContent(prompt);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("AI timeout")), 8000)
+    );
+
+    const result = await Promise.race([
+      model.generateContent(prompt),
+      timeoutPromise
+    ]);
+    
     let aiResponse = result.response.text().trim();
     
     if (aiResponse.startsWith("```json")) {

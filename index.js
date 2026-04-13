@@ -14,9 +14,15 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// Security & Middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(cors());
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  next();
+});
 
 // Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
@@ -28,13 +34,14 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 // ==========================================
 try {
   initializeFirebase();
+  console.log("Firebase initialized successfully.");
 } catch (error) {
-  console.error("Failed to initialize Firebase. Please check Vercel Environment Variables.");
+  console.error("Failed to initialize Firebase. Please check Environment Variables.");
 }
 
 // Test Route
 app.get("/", (req, res) => {
-  res.send("Quizify Secure Server is running smoothly");
+  res.send("Quizify Secure Server is running smoothly with AI modules.");
 });
 
 // ==========================================
@@ -241,7 +248,7 @@ app.delete('/api/quizzes/:quizId', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// CREATE QUIZ (AI logic removed, directly saves data)
+// CREATE QUIZ 
 // ==========================================
 app.post("/create-quiz", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -254,6 +261,7 @@ app.post("/create-quiz", authenticateToken, async (req, res) => {
 
     const quizId = `quiz_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
+    // Ensure antiCheat defaults are merged if missing
     const antiCheatSettings = quizData.antiCheatSettings || {
       copyPaste: true,
       tabSwitch: true,
@@ -330,16 +338,18 @@ app.post("/verify-google-attempt", async (req, res) => {
 
     const db = getFirebaseApp().firestore();
     
+    // Check if submitted
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
     const subDoc = await submissionRef.get();
     if (subDoc.exists) {
       return res.status(403).json({ error: "You have already completed and submitted this quiz." });
     }
 
+    // Check if abandoned
     const startedRef = db.collection('quizzes').doc(quizId).collection('startedAttempts').doc(email);
     const startDoc = await startedRef.get();
     if (startDoc.exists) {
-      return res.status(403).json({ error: "Quiz session abandoned. You cannot restart a quiz after leaving or reloading the page." });
+      return res.status(403).json({ error: "Quiz session abandoned. You cannot restart a secure quiz after leaving or reloading the page." });
     }
     
     res.status(200).json({ message: "Google account verified.", email, name: payload.name });
@@ -364,7 +374,7 @@ app.post("/start-attempt", async (req, res) => {
     }
 });
 
-// Submission route now just receives the fully graded payload from the frontend
+// Secure Submission Endpoint
 app.post("/submission", async (req, res) => {
   const payload = req.body;
   const { quizId, userDetails, submittedAt, score, questions } = payload;
@@ -379,20 +389,33 @@ app.post("/submission", async (req, res) => {
     const db = getFirebaseApp().firestore();
     const submissionRef = db.collection('quizzes').doc(quizId).collection('submissions').doc(email);
 
+    // Sanitize Anti-Cheat data to prevent injection/tampering
     const submissionData = {
       createdAt: new Date().toISOString(),
       description: payload.quizDescription || "",
       userDetails,
       submittedAt,
-      score,
-      questions,
+      score: {
+        totalMarks: Number(score.totalMarks) || 0,
+        obtainedMarks: Number(score.obtainedMarks) || 0,
+        percentage: Number(score.percentage) || 0
+      },
+      questions: questions.map(q => ({
+        questionId: q.originalIndex,
+        questionText: q.questionText,
+        questionType: q.questionType,
+        userAnswer: q.userAnswer,
+        correctAnswer: q.correctAnswer,
+        marks: q.marks,
+        isCorrect: q.isCorrect,
+        marksObtained: q.marksObtained || 0,
+        aiFeedback: q.aiFeedback || "" // Crucial for storing AI remarks on code/text
+      })),
       antiCheat: {
-        tabSwitches: payload.tabSwitches || 0,
-        webcamStrikes: payload.webcamStrikes || 0,
-        copyPasteAttempts: payload.copyPasteAttempts || 0,
-        identitySwapDetected: payload.identitySwapDetected || false,
-        wasAutoSubmitted: payload.wasAutoSubmitted || false,
-        isFlagged: payload.isFlagged || false
+        tabSwitches: parseInt(payload.tabSwitches) || 0,
+        webcamStrikes: parseInt(payload.webcamStrikes) || 0,
+        copyPasteAttempts: parseInt(payload.copyPasteAttempts) || 0,
+        isFlagged: Boolean(payload.isFlagged)
       }
     };
 
@@ -471,7 +494,7 @@ app.use((err, req, res, next) => {
 
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Secure Server is running on port ${PORT}`);
   });
 }
 
